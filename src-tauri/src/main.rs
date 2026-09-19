@@ -5,11 +5,26 @@ use notify::{RecursiveMode, Watcher};
 use serde::Serialize;
 use std::path::Path;
 use tauri::{Emitter, Manager};
-use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)))]
 use tauri_plugin_positioner::{Position, WindowExt};
 use tauri_plugin_store::StoreExt;
+
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+use tray_icon::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 // ── Vault store ──────────────────────────────────────────────────────────────
 
@@ -373,49 +388,46 @@ fn open_in_obsidian(
     vault_path: String,
     file_rel: Option<String>,
 ) -> Result<(), String> {
-    let vault_name = Path::new(&vault_path)
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-
-    let uri = match file_rel {
+    // `obsidian://open?vault=<name>` only resolves vaults Obsidian has already
+    // registered (i.e. opened at least once through the app) — a vault we just
+    // scaffolded on disk isn't known to it yet, which surfaces as "Vault not
+    // found". `path=<absolute path>` instead opens (and auto-registers) a
+    // vault directly from the filesystem, new or not.
+    let path = match file_rel {
         Some(rel) => {
             let full = Path::new(&vault_path).join(&rel);
             if full.is_dir() {
-                // Open first .md file in folder — Obsidian reveals the folder in sidebar
-                let index = std::fs::read_dir(&full)
+                // Prefer the first .md file so Obsidian opens straight into a note
+                // (it still reveals the folder in the sidebar); fall back to the
+                // folder itself if it's empty.
+                std::fs::read_dir(&full)
                     .ok()
                     .and_then(|entries| {
                         entries
                             .filter_map(|e| e.ok())
-                            .find(|e| {
-                                e.path().extension().and_then(|s| s.to_str()) == Some("md")
-                            })
-                            .and_then(|e| {
-                                e.path()
-                                    .strip_prefix(&vault_path)
-                                    .ok()
-                                    .map(|r| r.to_string_lossy().into_owned())
-                            })
-                    });
-                match index {
-                    Some(f) => {
-                        let f_no_ext = f.trim_end_matches(".md").to_owned();
-                        format!("obsidian://open?vault={}&file={}", vault_name, f_no_ext)
-                    }
-                    None => format!("obsidian://open?vault={}", vault_name),
-                }
+                            .find(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+                            .map(|e| e.path())
+                    })
+                    .unwrap_or(full)
             } else {
-                let rel_no_ext = rel.trim_end_matches(".md");
-                format!(
-                    "obsidian://open?vault={}&file={}",
-                    vault_name, rel_no_ext
-                )
+                full
             }
         }
-        None => format!("obsidian://open?vault={}", vault_name),
+        None => Path::new(&vault_path).to_path_buf(),
     };
+
+    // Encode each path segment individually and rejoin with literal `/` —
+    // Obsidian's URI handler doesn't decode a fully-encoded path (`%2F` for
+    // `/` is taken literally, not as a separator), so encoding the whole
+    // string at once breaks lookup even though it's valid RFC 3986.
+    let encoded_path = path
+        .to_string_lossy()
+        .split('/')
+        .map(|segment| urlencoding::encode(segment).into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
+
+    let uri = format!("obsidian://open?path={}", encoded_path);
 
     app.opener().open_url(&uri, None::<&str>).map_err(|e| e.to_string())
 }
@@ -433,30 +445,92 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("MyLife")
-                .on_tray_icon_event(|tray, event| {
-                    tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
+            // Linux/BSD: build the tray icon directly via the `tray-icon` crate's
+            // `ksni` (pure D-Bus) backend instead of Tauri's built-in tray, which
+            // uses libayatana-appindicator. That library never registers with
+            // omarchy-shell's StatusNotifierWatcher (basecamp/omarchy#12555) — and
+            // even on hosts where it does register, Click events are unsupported
+            // on the AppIndicator backend, so this also fixes click-to-toggle, not
+            // just visibility. ksni doesn't need a GTK event loop, so it's safe to
+            // build here alongside Tauri's own GTK-based window.
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "openbsd"
+            ))]
+            {
+                let icon_image = image::load_from_memory(include_bytes!("../icons/32x32.png"))
+                    .expect("failed to decode tray icon")
+                    .into_rgba8();
+                let (icon_w, icon_h) = icon_image.dimensions();
+                let icon = tray_icon::Icon::from_rgba(icon_image.into_raw(), icon_w, icon_h)
+                    .expect("failed to build tray icon");
+
+                let app_handle = app.handle().clone();
+                TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
                     if let TrayIconEvent::Click { button_state: MouseButtonState::Up, .. } = event {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
+                        if let Some(window) = app_handle.get_webview_window("main") {
                             if window.is_visible().unwrap_or(false) {
                                 window.hide().ok();
                             } else {
-                                #[cfg(target_os = "macos")]
-                                app.show().ok();
-                                #[cfg(target_os = "windows")]
-                                let _ = window.move_window(Position::TrayBottomCenter);
-                                #[cfg(not(target_os = "windows"))]
-                                let _ = window.move_window(Position::TrayBottomCenter);
+                                // No forced repositioning here: the window is user-movable
+                                // (drag the header), and re-snapping on every show would
+                                // discard wherever the user last dragged it to.
                                 window.show().ok();
                                 window.set_focus().ok();
                             }
                         }
                     }
-                })
-                .build(app)?;
+                }));
+
+                let tray = TrayIconBuilder::new()
+                    .with_tooltip("MyLife")
+                    .with_icon(icon)
+                    .build()
+                    .expect("failed to build tray icon");
+                // Kept alive for the process lifetime; TrayIcon removes itself on drop.
+                std::mem::forget(tray);
+            }
+
+            // Windows/macOS: unchanged, Tauri's built-in tray (AppIndicator is a
+            // Linux/BSD-only concept and isn't involved on these platforms).
+            #[cfg(not(any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "openbsd"
+            )))]
+            {
+                tauri::tray::TrayIconBuilder::new()
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .tooltip("MyLife")
+                    .on_tray_icon_event(|tray, event| {
+                        tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
+                        if let tauri::tray::TrayIconEvent::Click {
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                if window.is_visible().unwrap_or(false) {
+                                    window.hide().ok();
+                                } else {
+                                    #[cfg(target_os = "macos")]
+                                    app.show().ok();
+                                    #[cfg(target_os = "windows")]
+                                    let _ = window.move_window(Position::TrayBottomCenter);
+                                    window.show().ok();
+                                    window.set_focus().ok();
+                                }
+                            }
+                        }
+                    })
+                    .build(app)?;
+            }
 
             Ok(())
         })

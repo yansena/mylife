@@ -17,6 +17,7 @@
         "width": 380,
         "height": 520,
         "decorations": false,
+        "transparent": true,
         "visible": false,
         "alwaysOnTop": true,
         "resizable": false,

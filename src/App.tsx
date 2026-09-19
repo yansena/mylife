@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   isPermissionGranted,
   requestPermission,
@@ -281,6 +282,14 @@ export default function App() {
       <div className="popover">
         <header className="header" data-tauri-drag-region>
           <span className="app-name">MyLife</span>
+          <button
+            type="button"
+            className="close-btn"
+            title="Fechar"
+            onClick={() => getCurrentWindow().hide().catch((e) => setError(String(e)))}
+          >
+            ×
+          </button>
         </header>
         <div className="onboarding">
           <div className="onboard-icon">◎</div>
@@ -314,6 +323,14 @@ export default function App() {
             title="Configurações"
           >
             ⚙
+          </button>
+          <button
+            type="button"
+            className="close-btn"
+            title="Fechar"
+            onClick={() => getCurrentWindow().hide().catch((e) => setError(String(e)))}
+          >
+            ×
           </button>
         </div>
       </header>

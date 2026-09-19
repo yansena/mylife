@@ -60,6 +60,10 @@ button { font-family: inherit; font-size: inherit; cursor: pointer; border: none
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text);
+  /* Let clicks pass through to the header's drag region behind it — Tauri's
+     drag detection only checks the exact click target, not ancestors, so
+     without this, clicking the title text itself wouldn't start a drag. */
+  pointer-events: none;
 }
 
 .date-chip {
@@ -437,6 +441,22 @@ button { font-family: inherit; font-size: inherit; cursor: pointer; border: none
 
 .settings-btn:hover { background: var(--surface2); color: var(--text-2); }
 .settings-btn-active { color: var(--accent) !important; }
+
+.close-btn {
+  background: transparent;
+  color: var(--text-3);
+  font-size: 16px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.1s;
+}
+
+.close-btn:hover { background: var(--red); color: #fff; }
 
 .settings-row {
   display: flex;

@@ -8,6 +8,8 @@
     "opener:default",
     "notification:default",
     "core:tray:default",
+    "core:window:allow-hide",
+    "core:window:allow-start-dragging",
     "dialog:default",
     "store:allow-load",
     "store:allow-save",

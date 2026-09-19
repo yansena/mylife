@@ -27,4 +27,13 @@ tauri-plugin-dialog = "2"
 notify = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+urlencoding = "2"
+
+# Linux/BSD: build the tray icon directly via tray-icon's `ksni` (pure D-Bus)
+# backend instead of Tauri's built-in tray (libayatana-appindicator), which
+# never registers with omarchy-shell's StatusNotifierWatcher. See
+# basecamp/omarchy#12555 and src/main.rs for details.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
